@@ -281,6 +281,203 @@ reg m_axi_rvalid_d;
 	//flag write errors
 	assign read_resp_error = (axi_rready & M_AXI_RVALID & M_AXI_RRESP[1]);
 	
+	//---------------------
+	//user logic
+	//---------------------
+
+	//write address
+	always @(posedge M_AXI_ACLK)
+	begin
+		if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+			begin
+				axi_awaddr <= user_awaddr;
+			end 
+		else if(M_AXI_AWREADY && axi_awvalid)
+			begin
+				axi_awaddr <= axi_awaddr + 32'h00000004;
+			end 
+			
+	end 
 	
+	//write data generation
+	always @(posedge M_AXI_ACLK)
+	begin
+		if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+			begin
+				axi_wdata <= user_wdata;
+			end 
+		else if(M_AXI_WREADY && axi_wvalid)
+			begin
+				axi_wdata <= user_wdata;
+			end 
+			
+	end 
+	//read address
+	always @(posedge M_AXI_ACLK)
+	begin
+		if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+			begin
+				axi_araddr <= user_araddr;
+			end 
+		else if(M_AXI_ARREADY && axi_arvalid)
+			begin
+				axi_araddr <= axi_araddr + 32'h00000004;
+			end 
+			
+	end 
+	//implementation master command interface state machine
+	always @(posedge M_AXI_ACLK)
+	begin	
+		if(M_AXI_ARESET == 1'b0)
+			begin
+				mst_exec_state <= IDLE;
+				start_single_write <= 1'b0;
+				write_issued <= 1'b0;
+				start_single_read <= 1'b0;
+				read_issued <= 1'b0;
+			end
+		else
+			begin
+				start_single_read <= 1'b0;
+				//state transition
+				case(mst_exec_state)
+					IDLE:
+						if(init_w_txn_pulse == 1'b1)
+							begin
+								mst_exec_state <= INIT_WRITE;
+							end
+						else if(init_r_txn_pulse == 1'b1)
+							begin
+								mst_exec_state <= INIT_READ;
+								start_signal_read <= 1'b1;
+							end
+						else
+
+							begin
+								mst_exec_state <= IDLE;
+							end
+
+					INIT_WRITE:
+						if(write_done)
+							begin
+								mst_exec_state <= IDLE;
+							end 
+						else
+							begin
+								mst_exec_state <+ INIT_WRITE;
+									if(~axi_awalid && ~axi_walid && ~M_AXI_BVALID && ~last_write && ~start_signal_write && ~write_issued)
+										begin
+											start_signal_write <= 1'b1;
+											write_issued <= 1'b1;
+										end
+									else if(axi_bready)
+										begin
+											write_issued <= 1'b0;
+										end
+									else
+										begin
+											start_single_write <= 1'b0;
+										end
+							end
+
+					INIT_READ:
+						if(reads_done_d)
+							begin
+								mst_exec_state <= IDLE;
+							end
+						else
+							begin
+								mst_exec_state <= INIt_READ;
+								if(~axi_arvalid && ~M_AXI_RVALID && ~last_read && ~read_issued)
+									begin
+										read_issued <= 1'b1;
+									end
+								else if(axi_rready)
+									read_issued <= 1'b0;
+							end
+
+					default:
+						begin
+							mst_exec_state <= IDLE;
+						end
+				endcase 
+			end
+
+			//Terminal write count
+			always @(posedge M_AXI_ACLK)
+			begin
+			    if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+					last_write <= 1'b0;
+				else if((write_index == C_M_TRANSACTIONS_NUM) && M_AXI_AWREADY)
+					last_write <= 1'b1;
+				else
+					last_write <= last_write;
+			end
+
+			//check for last wirte completion
+			always @(posedge M_AXI_ACLK)
+			begin
+				if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+					write_done <= 1'b0;
+				else if(last_write && M_AXI_BVALID && axi_bready)
+					write_done <= 1'b1;
+				else
+					write_done <= write_done;
+			end
+            
+			//read example
+
+
+			//terminal read count
+			always @(posedge M_AXI_ACLK)
+			begin
+				if(M_AXI_ARESETN == 0 || init_r_txn_pulse == 1'b1)
+					last_read <= 1'b0;
+				else if((read_index == C_M_TRANSACTIONS_NUM) && (M_AXI_ARREADY))
+					last_read <= 1'b1;
+				else
+					last_read <= last_read;
+			end
+			//checkout for last read completion
+			always @(posedge M_AXI_ACLK)
+			begin
+				m_axi_rvalid_d <= M_AXI_RVALID;
+				reads_done_d <= reads_done;
+				if(last_read && M_AXI_RVALID && !m_axi_rvalid_d)
+					reads_done <= 1'b1;
+				else
+					reads_done <= 1'b0;
+
+			end
+			assign done_w_axi_txn = writes_done;
+			assign done_r_axi_txn = reads_done || reads_done_d;
+
+
+			//register and hold any data mismatches, or read/write interface errors
+			always @(posedge M_AXI_ACLK)
+			begin
+				if(M_AXI_ARESETN == 0 || init_w_txn_pulse == 1'b1)
+					w_error_reg <= 1'b0;
+				else if(write_resp_error)
+					w_error_reg <= 1'b1;
+				else
+					w_error_reg <= w_error_reg;
+			end
+			//register and hold any data mismatches, or read/write interface errors
+			always @(posedge M_AXI_ACLK)
+			begin
+				if(M_AXI_ARESETN == 0 || init_r_txn_pulse == 1'b1)
+					r_error_reg <= 1'b0;
+				else if(read_resp_error)
+					r_error_reg <= 1'b1;
+				else 
+					r_error_reg <= r_error_reg;
+			end
+			assign error_w_axi_txn = w_error_reg;
+			assign error_r_axi_txn = r_error_reg;
+
+			//add user logic here
+
+			//user logic ends
 	
 endmodule;
