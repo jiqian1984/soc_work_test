@@ -1,0 +1,3 @@
+WORK > worklib
+worklib : ./worklib
+OTHERS=/home/jjyoyo/work/compile_simlib/vcs/synopsys_sim.setup

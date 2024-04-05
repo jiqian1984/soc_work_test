@@ -13,34 +13,32 @@
 //-----------------------------------------------------------------------------
 `timescale 1ns / 1ps
 `define NODEBUG
-//`define DWA 16
-//`define AWB 4
-//`define DWB 16
-//`define MULTNUM  1
+`include "selectio.svh"
+
 program tes_selectIO
 (
 	input i_dclk,
-
     output o_rst,
-	
+
+   //out inter logic
+   input               i_dclk_div,
+   output [DW*SP_Mult-1 : 0]          o_pardata,
    
-   //input serial 
-	input i_clk_p,
-    input i_clk_n,
-	input [DW-1 : 0] i_data_p,
-	input [DW-1 : 0] i_data_n,
-	
    //output serial
     output o_clk_p,
     output o_clk_n,
 	output [DW-1 : 0]    o_data_p,
 	output [DW-1 : 0]    o_data_n,
-   
-   //oout inter logic
-   input               o_fclk,
-   output [DW*SP_Mult-1 : 0]          o_pardata,
+
+    //input serial 
+	input i_clk_p,
+    input i_clk_n,
+	input [DW-1 : 0] i_data_p,
+	input [DW-1 : 0] i_data_n,
+
    //input inter logic
-   input  [DW*SP_Mult-1 : 0]          i_pardata,
+   input               i_fclk,
+   input  [DW*SP_Mult-1 : 0]          i_pardata
    
 
 );
@@ -59,53 +57,6 @@ class sin_control;
 	}
 endclass
 
-import "DPI-C" function real sin(input real r);
-
-function integer my_sin;
-input integer value;
-input integer length;
-integer act_value;
-real duble_value;
-real duble_sin;
-begin
-    if(value > length) begin
-	    act_value = value - length;
-	end
-	else begin
-	    act_value = value;
-	end
-	//`ifdef DEBUG
-	//	$write("my_sin func:value in is %4d,length is %4d,act_valueis %4d\n",value,length,act_value);
-	//`endif
-	duble_value = 6.283*(real'(act_value)/real'(length));
-	duble_sin = sin(duble_value);
-    my_sin = integer'(duble_sin * 1024);
-end 
-endfunction 
-
-
-function logic[31:0] reference_model;
-input shortint input_i;
-input shortint input_q;
-input shortint i_sin;
-input shortint i_cos;
-int step_i;
-int step_q;
-shortint result_i;
-shortint result_q;
-begin
-    step_i = (-(input_q * i_sin)) + input_i * i_cos ;
-	step_q = input_i * i_sin + input_q * i_cos;
-    result_i = shortint'(step_i >>> 10);
-    result_q = shortint'(step_q >>> 10);
-`ifdef DEBUG
-	$write("---input_i is 'h%0h;  input_q is 'h%0h;  i_sin is 'h%0h;  i_cos is 'h%0h;\n",input_i,input_q,i_sin,i_cos);
-	$write("---step_i is 'h%0h;  step_q is 'h%0h\n",step_i,step_q);
-	$write("---result_i is 'h%0h;  result_q is 'h%0h\n",result_i,result_q);
-`endif
-	reference_model = {result_i,result_q};
-end 
-endfunction 
 
 //////////////////////////////////////////
 // Definition: Coverage Group 
@@ -133,7 +84,7 @@ data_control IQ_DATA;
 sin_control  SINCOS_DATA;
 msg_cvr my_msg_crv_0;
 
-logic [31:0] data_iq_msg0[$]; 
+logic [DW*SP_Mult-1:0] data_iq_msg0[$]; 
 logic [31:0] data_coff_msg0[$]; 
 mailbox mbox_after_multi; 
 
@@ -145,97 +96,93 @@ int rate_count_max = 0;
 
 int data_read_count = 0;
 
-//reset the init set of filter coff; 
+
+    output o_rst,
+    output [DW*SP_Mult-1 : 0]          o_pardata,
+    output o_clk_p,
+    output o_clk_n,
+	output [DW-1 : 0]    o_data_p,
+	output [DW-1 : 0]    o_data_n,
+
+//reset the previous reset; 
 task init_reset(input [3:0] rst_delay = 3);
     $write("Here is the init,reset\n");
 	o_rst <= 1'b1;
-	o_data_vld <= 1'b0;
-	o_data_ca <= 1'b0;
-	o_data_i <= {(16){1'b0}};
-	o_data_q <= {(16){1'b0}};
-	o_sin_coff <= {(16){1'b0}};
-	o_cos_coff <= {(16){1'b0}};
+	o_pardata <= {(16){1'b0}};
 	repeat(rst_delay) @(posedge i_clk);
 	o_rst <= 1'b0;
-	o_data_vld <= 1'b0;
-	o_data_ca <= 1'b0;
-	o_data_i <= {(16){1'b0}};
-	o_data_q <= {(16){1'b0}};
-	o_sin_coff <= {(16){1'b0}};
-	o_cos_coff <= {(16){1'b0}};
+	o_pardata <= {(16){1'b0}};
 	@(posedge i_clk);
 endtask 
 
 
-task iq_data_generate(input frame_first = 0);
+task paradata_generate(input frame_first = 0);
     //rand the begin addr of wr addr .
     IQ_DATA.randomize();
 	//TEST_NUM.test_mode,MULT_NUM.mult_mode,$time);
 	$write("here is i q data generate;this is the %4d times,the data_mode is %4d at time: %12d \n",num_current_a,IQ_DATA.data_mode,$time);
-	o_data_vld = 1'b0;
-	o_data_ca = 1'b0;
+	o_pardata = {(DW*SP_Mult){1'b0}};
 	//accroding the addr_mode,set o_addr_a init value;
 	case(IQ_DATA.data_mode)
-	    0 : o_data_i   = {16'h555};
-		1 : o_data_i   = {(16){1'b0}};
-		2 : o_data_i   = {(16){1'b0}};
-		3 : o_data_i   = {(16){1'b0}};
+	    0 : o_pardata   = {(DW*SP_Mult){1'b0}};
+		1 : o_pardata   = {(DW*SP_Mult){1'b1}};
+		2 : o_pardata   = {(DW*SP_Mult/2){2'b01}}};
+		3 : o_pardata   = {(DW*SP_Mult/2){1'b10}}};
 		default :      
-		    o_data_i   = {(16){1'b0}};
+		    o_pardata   = {(DW*SP_Mult){1'b0}};
 	endcase;   
-	o_data_q = o_data_i;
     //generate one whole cycle(16 TC,1TC = 80clk(include 64clk vld(4*16mode)))
 	for(int sample_cycle = 0; sample_cycle < 16; sample_cycle ++)
 	begin
 	    for(int sample_tc = 0;sample_tc < 80;sample_tc ++)
 		begin
-		    if(sample_tc < 64)
-			    o_data_vld = 1'b1;
-			else
-		        o_data_vld = 1'b0;
-				
-			if((sample_tc == 1'b0) && (sample_cycle == 1'b0))
-			    o_data_ca = 1'b1;
-			else
-			    o_data_ca = 1'b0;
-				
-			if(sample_tc < 64) begin
-			    if(sample_tc == 1'b0 ) begin
-				    case(IQ_DATA.data_mode)
-	                    0 : o_data_i   = {16'h555};
-	                	1 : o_data_i   = {(16){1'b0}};
-	                	2 : o_data_i   = {(16){1'b0}};
-	                	3 : o_data_i   = {(16){1'b0}};
-	                	default :      
-	                	    o_data_i   = {(16){1'b0}};
-	                endcase;  
-				end
-				else begin
-			        case(IQ_DATA.data_mode)
-			            0 : o_data_i =  ~o_data_i;
-			        	1 : o_data_i = o_data_i + 16'h1111;
-			        	2 : o_data_i = o_data_i + 1;
-                        3 : o_data_i = my_sin(sample_tc,64);			
-			        endcase;
-				end
+		    if((sample_tc == 1'b0) && (sample_cycle == 1'b0)) begin
+			
+			end 
+			else begin
+				case(IQ_DATA.data_mode)
+			            0 : o_pardata = o_pardata + 1;
+			        	1 : o_pardata = ~o_pardata;
+			        	2 : o_pardata = ~o_pardata + {(DW*SP_Mult/2){2'b01}}};
+                        3 : o_pardata = ~o_pardata;			
+			       endcase;
 			end
-			o_data_q = o_data_i;
-			//`ifdef DEBUG
-			//    $write("IQ_DATA generate is:sample_cycle is %4d,sample_tc is %d,o_data_i is 'h%0h,o_data_q is 'h%0h\n",sample_cycle,sample_tc,o_data_i,o_data_q);
-			//`endif
-			data_iq_msg0.push_back({o_data_i,o_data_q});
-		    @(posedge i_clk);
+			`ifdef DEBUG
+			    $write("IQ_DATA generate is:sample_cycle is %4d,sample_tc is %d,o_pardata is 'h%0h,\n",sample_cycle,sample_tc,o_pardata);
+			`endif
+			data_iq_msg0.push_back(o_pardata);
+		    @(posedge i_dclk_div);
 		end
 		
 		//$write("here is port a write;this is the %4d times,the read addr is %4d,data is : %4d ,for sample_a is: %4d, at time: %12d \n",num_current_a,o_addr_a,o_wrdata_a,sample_a,$time);
 	end 
-	o_data_vld = 1'b0;
-	o_data_ca = 1'b0;
-	o_data_i   = {(16){1'b0}};
-	o_data_q   = {(16){1'b0}};
-	@(posedge i_clk);	
+	o_pardata = {(DW*SP_Mult){1'b0}};
+	@(posedge i_dclk_div);	
     num_current_a = num_current_a + 1;
 endtask
+
+
+task data_input(input read_delay = 1);
+    //rand the begin addr of rd addr .
+	$write("here is data input read;this is the %4d times, at time: %12d \n",num_current_din,$time);
+	
+	@(posedge i_data_ca);
+	for(int read_i = 0; read_i < 1280; read_i ++)
+	begin
+	    //if(i_data_vld == 1'b1) begin
+		    mbox_after_multi.put({i_data_i,i_data_q});
+		//end
+		`ifdef DEBUG
+		    $write("data_input is:i_data_i is 'h%0h,i_data_q is 'h%0h;it is %4d times at time: %12d \n",i_data_i,i_data_q,data_read_count,$time);
+		`endif
+		data_read_count = data_read_count + 1;
+	    @(posedge i_clk);
+	end 
+    num_current_din = num_current_din + 1;
+endtask
+
+
+
 
 task refsin_generate(input frame_first = 0);
     //rand the begin addr of wr addr .
@@ -275,26 +222,6 @@ task refsin_generate(input frame_first = 0);
 	
     num_current_b = num_current_b + 1;
 endtask
-
-task data_input(input read_delay = 1);
-    //rand the begin addr of rd addr .
-	$write("here is data input read;this is the %4d times, at time: %12d \n",num_current_din,$time);
-	
-	@(posedge i_data_ca);
-	for(int read_i = 0; read_i < 1280; read_i ++)
-	begin
-	    //if(i_data_vld == 1'b1) begin
-		    mbox_after_multi.put({i_data_i,i_data_q});
-		//end
-		`ifdef DEBUG
-		    $write("data_input is:i_data_i is 'h%0h,i_data_q is 'h%0h;it is %4d times at time: %12d \n",i_data_i,i_data_q,data_read_count,$time);
-		`endif
-		data_read_count = data_read_count + 1;
-	    @(posedge i_clk);
-	end 
-    num_current_din = num_current_din + 1;
-endtask
-
 
 
 
